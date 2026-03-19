@@ -15,9 +15,13 @@
     "main": "index.js",
     "scripts": {
         "build": "rollup -c",
+    "build:vpcc:wasm": "powershell -ExecutionPolicy Bypass -File ./build-vpcc-wasm.ps1",
         "watch": "rollup -c -w",
         "serve": "serve dist -C",
+    "serve:vpcc": "node local-server/vpcc-server.cjs",
         "develop": "cross-env BUILD_TYPE=debug concurrently --kill-others \"npm run watch\" \"npm run serve\"",
+    "develop:vpcc:wasm": "cross-env BUILD_TYPE=debug concurrently --kill-others \"npm run watch\" \"npm run serve\"",
+    "develop:vpcc": "cross-env BUILD_TYPE=debug concurrently --kill-others \"npm run watch\" \"npm run serve\" \"npm run serve:vpcc\"",
         "develop:auto-launch": "concurrently --kill-others \"xdg-open 'http://localhost:3000/'\" \"npm run watch\" \"npm run serve\"",
         "lint": "eslint src"
     },

@@ -1,5 +1,6 @@
 node_modules
 dist
+.vpcc-jobs
 .DS_Store
 .npmrc
 .vscode

@@ -8,6 +8,9 @@ import { Scene } from './scene';
 import { Splat } from './splat';
 import { serializePly, serializePlyCompressed, SerializeSettings, serializeSog, serializeSplat, serializeViewer, SogSettings, ViewerExportSettings } from './splat-serialize';
 import { localize } from './ui/localization';
+import { decodeVpccWithLocalService } from './vpcc/local-service-decoder';
+import type { VpccImportFile } from './vpcc/types';
+import { decodeVpccWithWasm } from './vpcc/wasm-decoder';
 
 // ts compiler and vscode find this type, but eslint does not
 type FilePickerAcceptType = unknown;
@@ -103,7 +106,7 @@ const allImportTypes = {
         'application/x-gaussian-splat': ['.json', '.sog', '.splat', '.ksplat', '.spz'],
         'image/webp': ['.webp'],
         'application/json': ['.lcc'],
-        'application/octet-stream': ['.bin'],
+        'application/octet-stream': ['.bin', '.v3c'],
         'text/plain': ['.txt']
     }
 };
@@ -152,6 +155,17 @@ type ImportFile = {
 };
 
 const vec = new Vec3();
+
+const isVpccStreamFile = (filename: string) => {
+    return ['.bin', '.v3c'].some(ext => filename.toLowerCase().endsWith(ext));
+};
+
+const getErrorMessage = (error: unknown) => {
+    if (error instanceof Error) {
+        return error.message;
+    }
+    return String(error);
+};
 
 // load inria camera poses from json file
 const loadCameraPoses = async (file: ImportFile, events: Events) => {
@@ -263,6 +277,14 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         });
     };
 
+    const showVpccError = async (message: string, filename: string) => {
+        await events.invoke('showPopup', {
+            type: 'error',
+            header: 'VPCC decode failed',
+            message: `${message} while decoding '${filename}'`
+        });
+    };
+
     // import splat model(s) - handles single files, SOG, and LCC formats
     const importSplatModel = async (files: ImportFile[], animationFrame: boolean) => {
         try {
@@ -287,17 +309,46 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 if (f.contents) fileSystem.addFile(f.filename, f.contents);
             });
 
-            // For URL-only single file, use full URL as filename
-            const filename = (files.length === 1 && !mainFile.contents && mainFile.url) ?
-                mainFile.url :
-                mainFile.filename;
+            // Prefer the caller supplied filename so URL-backed imports still keep a readable asset name
+            const filename = mainFile.filename || mainFile.url;
 
             const model = await scene.assetLoader.load(filename, fileSystem, animationFrame);
             await scene.add(model);
             return model;
         } catch (error) {
             const displayName = files[0]?.filename ?? 'unknown';
-            await showLoadError(error.message ?? error, displayName);
+            await showLoadError(getErrorMessage(error), displayName);
+        }
+    };
+
+    const decodeVpccFile = async (file: File) => {
+        events.fire('startSpinner');
+
+        try {
+            let decodedFile: VpccImportFile;
+            const allowLocalFallback = (window as any).VPCC_ENABLE_LOCAL_FALLBACK === true;
+
+            try {
+                decodedFile = await decodeVpccWithWasm(file);
+            } catch (wasmError) {
+                if (!allowLocalFallback) {
+                    throw wasmError;
+                }
+
+                try {
+                    decodedFile = await decodeVpccWithLocalService(file);
+                } catch (serviceError) {
+                    const wasmMessage = getErrorMessage(wasmError);
+                    const serviceMessage = getErrorMessage(serviceError);
+                    throw new Error(`Browser VPCC WASM decode failed: ${wasmMessage}\n\nLocal fallback also failed: ${serviceMessage}`);
+                }
+            }
+
+            return await importSplatModel([decodedFile], false);
+        } catch (error) {
+            await showVpccError(getErrorMessage(error), file.name);
+        } finally {
+            events.fire('stopSpinner');
         }
     };
 
@@ -314,11 +365,17 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         } else if (isSog(filenames) || isLcc(filenames)) {
             // import multi-file splat model (SOG or LCC)
             result.push(await importSplatModel(files, animationFrame));
+        } else if (files.length === 1 && isVpccStreamFile(filenames[0])) {
+            const sourceFile = files[0];
+            const contents = sourceFile.contents ?? new File([await (await fetch(sourceFile.url!)).blob()], sourceFile.filename, {
+                type: 'application/octet-stream'
+            });
+            result.push(await decodeVpccFile(contents));
         } else {
             // check for unrecognized file types
             for (let i = 0; i < filenames.length; i++) {
                 const filename = filenames[i].toLowerCase();
-                if (['.ssproj', '.ply', '.splat', '.sog', '.webp', 'images.txt', '.json', '.ksplat', '.spz'].every(ext => !filename.endsWith(ext))) {
+                if (['.ssproj', '.ply', '.splat', '.sog', '.webp', 'images.txt', '.json', '.ksplat', '.spz', '.v3c'].every(ext => !filename.endsWith(ext))) {
                     await showLoadError('Unrecognized file type', filename);
                     return;
                 }
@@ -357,7 +414,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         fileSelector = document.createElement('input');
         fileSelector.setAttribute('id', 'file-selector');
         fileSelector.setAttribute('type', 'file');
-        fileSelector.setAttribute('accept', '.ply,.splat,meta.json,.json,.webp,.ssproj,.sog,.lcc,.bin,.txt,.ksplat,.spz');
+        fileSelector.setAttribute('accept', '.ply,.splat,meta.json,.json,.webp,.ssproj,.sog,.lcc,.bin,.v3c,.txt,.ksplat,.spz');
         fileSelector.setAttribute('multiple', 'true');
 
         fileSelector.onchange = () => {
