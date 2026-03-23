@@ -80,14 +80,20 @@ const dataTableToGSplatData = (dataTable: DataTable): GSplatData => {
  * @param skipReorder - Skip morton reordering (for files already in morton order or animation playback)
  */
 const loadGSplatData = async (filename: string, fileSystem: ReadFileSystem, skipReorder?: boolean): Promise<GSplatData> => {
+    const tAllStart = performance.now();
     const inputFormat = getInputFormat(filename);
     const lowerFilename = filename.toLowerCase();
+    let readFileMs = 0;
+    let reorderMs = 0;
+    let convertMs = 0;
+    let didReorder = false;
 
     // Handle bundled SOG (.sog extension) - wrap with ZipReadFileSystem
     if (inputFormat === 'sog' && lowerFilename.endsWith('.sog')) {
         const source = await fileSystem.createSource(filename);
         const zipFs = new ZipReadFileSystem(source);
         try {
+            const tReadStart = performance.now();
             const tables = await readFile({
                 filename: 'meta.json',
                 inputFormat: 'sog',
@@ -95,13 +101,31 @@ const loadGSplatData = async (filename: string, fileSystem: ReadFileSystem, skip
                 params: [],
                 fileSystem: zipFs
             });
-            return dataTableToGSplatData(tables[0]);
+            readFileMs = performance.now() - tReadStart;
+
+            const tConvertStart = performance.now();
+            const gsplatData = dataTableToGSplatData(tables[0]);
+            convertMs = performance.now() - tConvertStart;
+
+            console.log('[PLY TIMING][loadGSplatData]', {
+                filename,
+                inputFormat,
+                skipReorder: !!skipReorder,
+                didReorder,
+                readFileMs,
+                reorderMs,
+                convertMs,
+                totalMs: performance.now() - tAllStart
+            });
+
+            return gsplatData;
         } finally {
             zipFs.close();
         }
     }
 
     // Read the file using splat-transform
+    const tReadStart = performance.now();
     const tables = await readFile({
         filename,
         inputFormat,
@@ -109,6 +133,7 @@ const loadGSplatData = async (filename: string, fileSystem: ReadFileSystem, skip
         params: [],
         fileSystem
     });
+    readFileMs = performance.now() - tReadStart;
 
     // Reorder data into morton order for better render performance.
     // Skip reordering for:
@@ -117,17 +142,35 @@ const loadGSplatData = async (filename: string, fileSystem: ReadFileSystem, skip
     // - When skipReorder is true (ssproj files are already ordered, animation frames need speed)
     const isCompressedPly = lowerFilename.endsWith('.compressed.ply');
     if (inputFormat !== 'sog' && !isCompressedPly && !skipReorder) {
+        didReorder = true;
+        const tReorderStart = performance.now();
         const indices = new Uint32Array(tables[0].numRows);
         for (let i = 0; i < indices.length; i++) {
             indices[i] = i;
         }
         sortMortonOrder(tables[0], indices);
         tables[0].permuteRowsInPlace(indices);
+        reorderMs = performance.now() - tReorderStart;
     }
 
     // Convert to GSplatData (use first table, as most formats return single table)
     // LCC may return multiple tables for different LOD levels - we use the first (highest detail)
-    return dataTableToGSplatData(tables[0]);
+    const tConvertStart = performance.now();
+    const gsplatData = dataTableToGSplatData(tables[0]);
+    convertMs = performance.now() - tConvertStart;
+
+    console.log('[PLY TIMING][loadGSplatData]', {
+        filename,
+        inputFormat,
+        skipReorder: !!skipReorder,
+        didReorder,
+        readFileMs,
+        reorderMs,
+        convertMs,
+        totalMs: performance.now() - tAllStart
+    });
+
+    return gsplatData;
 };
 
 /**

@@ -34,6 +34,9 @@ To initialize a local development environment for SuperSplat, ensure you have [N
 
 When changes to the source are detected, SuperSplat is rebuilt automatically. Simply refresh your browser to see your changes.
 
+## 
+
+
 ## GS4 Encoder Building
 
 Clone the repository:

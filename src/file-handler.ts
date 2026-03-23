@@ -287,6 +287,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
 
     // import splat model(s) - handles single files, SOG, and LCC formats
     const importSplatModel = async (files: ImportFile[], animationFrame: boolean) => {
+        const tImportStart = performance.now();
         try {
             const filenames = files.map(f => f.filename.toLowerCase());
 
@@ -304,16 +305,33 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             const baseUrl = mainFile.url ? new URL('.', new URL(mainFile.url, window.location.href)).href : undefined;
 
             // Create file system with all local files, falling back to URL loading
+            const tFileSystemStart = performance.now();
             const fileSystem = new MappedReadFileSystem(baseUrl);
             files.forEach((f) => {
                 if (f.contents) fileSystem.addFile(f.filename, f.contents);
             });
+            const tFileSystemEnd = performance.now();
 
             // Prefer the caller supplied filename so URL-backed imports still keep a readable asset name
             const filename = mainFile.filename || mainFile.url;
 
+            const tLoadStart = performance.now();
             const model = await scene.assetLoader.load(filename, fileSystem, animationFrame);
+            const tLoadEnd = performance.now();
+
+            const tAddStart = performance.now();
             await scene.add(model);
+            const tAddEnd = performance.now();
+
+            console.log('[IMPORT TIMING][importSplatModel]', {
+                files: files.map(f => f.filename),
+                animationFrame: !!animationFrame,
+                fileSystemMs: tFileSystemEnd - tFileSystemStart,
+                loadMs: tLoadEnd - tLoadStart,
+                addMs: tAddEnd - tAddStart,
+                totalMs: tAddEnd - tImportStart
+            });
+
             return model;
         } catch (error) {
             const displayName = files[0]?.filename ?? 'unknown';
@@ -326,17 +344,34 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
 
         try {
             let decodedFile: VpccImportFile;
+            const tFlowStart = performance.now();
             const allowLocalFallback = (window as any).VPCC_ENABLE_LOCAL_FALLBACK === true;
+            const forceLocalFallback = (window as any).VPCC_FORCE_LOCAL_FALLBACK === true;
+            const forceWasm = (window as any).VPCC_FORCE_WASM === true;
+            let decodePath: 'wasm' | 'local' | 'wasm->local' | 'forced-local' | 'forced-wasm' = 'wasm';
 
+            const tDecodeStart = performance.now();
             try {
-                decodedFile = await decodeVpccWithWasm(file);
+                if (forceLocalFallback) {
+                    decodedFile = await decodeVpccWithLocalService(file);
+                    decodePath = 'forced-local';
+                } else if (forceWasm) {
+                    decodedFile = await decodeVpccWithWasm(file);
+                    decodePath = 'forced-wasm';
+                } else {
+                    decodedFile = await decodeVpccWithWasm(file);
+                    decodePath = 'wasm';
+                }
             } catch (wasmError) {
                 if (!allowLocalFallback) {
                     throw wasmError;
                 }
 
                 try {
+                    decodePath = 'wasm->local';
                     decodedFile = await decodeVpccWithLocalService(file);
+                    // if we reach here, wasm failed and local succeeded
+                    decodePath = 'local';
                 } catch (serviceError) {
                     const wasmMessage = getErrorMessage(wasmError);
                     const serviceMessage = getErrorMessage(serviceError);
@@ -344,7 +379,21 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 }
             }
 
-            return await importSplatModel([decodedFile], false);
+            const tDecodeEnd = performance.now();
+
+            const tImportStart = performance.now();
+            const model = await importSplatModel([decodedFile], false);
+            const tImportEnd = performance.now();
+
+            console.log('[VPCC TIMING][FLOW]', {
+                file: file.name,
+                decodePath,
+                decodeMs: tDecodeEnd - tDecodeStart,
+                importMs: tImportEnd - tImportStart,
+                totalMs: tImportEnd - tFlowStart
+            });
+
+            return model;
         } catch (error) {
             await showVpccError(getErrorMessage(error), file.name);
         } finally {
@@ -375,7 +424,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             // check for unrecognized file types
             for (let i = 0; i < filenames.length; i++) {
                 const filename = filenames[i].toLowerCase();
-                if (['.ssproj', '.ply', '.splat', '.sog', '.webp', 'images.txt', '.json', '.ksplat', '.spz', '.v3c'].every(ext => !filename.endsWith(ext))) {
+                if (['.ssproj', '.ply', '.splat', '.sog', '.webp', 'images.txt', '.json', '.ksplat', '.spz', '.v3c', '.bin'].every(ext => !filename.endsWith(ext))) {
                     await showLoadError('Unrecognized file type', filename);
                     return;
                 }

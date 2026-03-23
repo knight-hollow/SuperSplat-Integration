@@ -14,9 +14,32 @@
         <script>
             const sw = navigator.serviceWorker;
             if (sw) {
-                sw.register('./sw.js')
-                    .then(reg => console.log('service worker registered', reg))
-                    .catch(err => console.log('failed to register service worker', err));
+                const isLocalhost = (
+                    location.hostname === 'localhost' ||
+                    location.hostname === '127.0.0.1' ||
+                    location.hostname === '[::1]'
+                );
+
+                // For local development we disable (and unregister) the Service Worker to avoid stale cache.
+                // This removes the need for manual "Clear SW / Unregister SW" between rebuilds.
+                if (isLocalhost) {
+                    const key = 'supersplat_sw_unregistered_once';
+                    if (sessionStorage.getItem(key) !== '1') {
+                        sessionStorage.setItem(key, '1');
+                        sw.getRegistrations()
+                            .then((regs) => Promise.all(regs.map((r) => r.unregister())))
+                            .then(() => {
+                                console.log('service worker unregistered for localhost dev');
+                                // Reload once to ensure the current page is no longer controlled by the old SW.
+                                location.reload();
+                            })
+                            .catch((err) => console.log('failed to unregister service worker', err));
+                    }
+                } else {
+                    sw.register('./sw.js')
+                        .then(reg => console.log('service worker registered', reg))
+                        .catch(err => console.log('failed to register service worker', err));
+                }
             }
         </script>
     </head>

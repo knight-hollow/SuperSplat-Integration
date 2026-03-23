@@ -27,20 +27,40 @@ class AssetLoader {
     }
 
     async load(filename: string, fileSystem: ReadFileSystem, animationFrame?: boolean, skipReorder?: boolean) {
+        const tAllStart = performance.now();
         if (!animationFrame) {
             this.events.fire('startSpinner');
         }
 
         try {
             // Skip reordering for animation frames (speed) or when explicitly requested (already ordered)
+            const tLoadGSplatDataStart = performance.now();
             const gsplatData = await loadGSplatData(filename, fileSystem, skipReorder || animationFrame);
+            const tLoadGSplatDataEnd = performance.now();
+
+            const tValidateStart = performance.now();
             validateGSplatData(gsplatData);
+            const tValidateEnd = performance.now();
 
             const asset = new Asset(filename, 'gsplat', { url: `local-asset-${Date.now()}`, filename });
             this.app.assets.add(asset);
-            asset.resource = new GSplatResource(this.app.graphicsDevice, gsplatData);
 
-            return new Splat(asset, getOrientation(filename));
+            const tResourceStart = performance.now();
+            asset.resource = new GSplatResource(this.app.graphicsDevice, gsplatData);
+            const tResourceEnd = performance.now();
+
+            const splat = new Splat(asset, getOrientation(filename));
+            console.log('[PLY TIMING][assetLoader.load]', {
+                filename,
+                animationFrame: !!animationFrame,
+                skipReorder: !!skipReorder,
+                loadGSplatDataMs: tLoadGSplatDataEnd - tLoadGSplatDataStart,
+                validateMs: tValidateEnd - tValidateStart,
+                gsplatResourceMs: tResourceEnd - tResourceStart,
+                totalMs: performance.now() - tAllStart
+            });
+
+            return splat;
         } finally {
             if (!animationFrame) {
                 this.events.fire('stopSpinner');
