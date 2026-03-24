@@ -36,7 +36,7 @@ const loadModule = async () => {
                     // Suppress Emscripten printf/emscripten_log output by default.
                     // This can noticeably reduce overhead during heavy decoding.
                     print: (_text: unknown) => {},
-                    printErr: (_text: unknown) => {},
+                    printErr: (_text: unknown) => {}
                 }
             );
         })();
