@@ -1,0 +1,8 @@
+{
+  "id": "regular",
+  "inputPath": "D:/Users/Student/Desktop/Haining/GS4-vpcc/Results/V-PCC-GS4-Encoder-pack-none-26-03-10-235011/results/cricket_player/r01/frame_0000.bin",
+  "decodeFlowLog": "[log] [VPCC TIMING][FLOW] {file: frame_0000.bin, decodePath: wasm, decodeMs: 4416.299999952316, importMs: 791.9000000953674, totalMs: 5208.200000047684}",
+  "importTimingLog": "[log] [IMPORT TIMING][importSplatModel] {files: Array(1), animationFrame: false, fileSystemMs: 0.09999990463256836, loadMs: 644.7000000476837, addMs: 146.5}",
+  "popupTexts": [],
+  "pageErrors": []
+}
