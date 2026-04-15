@@ -1,14 +1,16 @@
 import type { VpccImportFile } from './types';
 
 type VpccWasmModule = {
-    FS: {
-        mkdir: (path: string) => void;
+    HEAPU8: Uint8Array;
+    _malloc: (size: number) => number;
+    _free: (ptr: number) => void;
+    ccall: (name: string, returnType: string | null, argTypes: string[], args: unknown[]) => any;
+    FS?: {
+        mkdirTree: (path: string) => void;
         writeFile: (path: string, data: Uint8Array) => void;
         readFile: (path: string) => Uint8Array;
         unlink: (path: string) => void;
-        rmdir: (path: string) => void;
     };
-    ccall: (name: string, returnType: string | null, argTypes: string[], args: unknown[]) => any;
 };
 
 type VpccWasmFactory = (moduleOverrides?: Record<string, unknown>) => Promise<VpccWasmModule>;
@@ -16,14 +18,6 @@ type VpccWasmFactory = (moduleOverrides?: Record<string, unknown>) => Promise<Vp
 const wasmModuleUrl = () => new URL('/static/lib/vpcc/pcc-app-decoder-wasm.js', window.location.href).href;
 
 let modulePromise: Promise<VpccWasmModule> | null = null;
-
-const ensureDir = (FS: VpccWasmModule['FS'], path: string) => {
-    try {
-        FS.mkdir(path);
-    } catch (error) {
-        // ignore EEXIST from repeated decode calls
-    }
-};
 
 const loadModule = async () => {
     if (!modulePromise) {
@@ -50,46 +44,77 @@ const decodeVpccWithWasm = async (file: File): Promise<VpccImportFile> => {
     const tModuleStart = performance.now();
     const module = await loadModule();
     const tModuleEnd = performance.now();
-    const { FS } = module;
-
-    ensureDir(FS, '/vpcc');
-    ensureDir(FS, '/vpcc/input');
-    ensureDir(FS, '/vpcc/output');
 
     const inputName = file.name.replace(/[^\w.\-]+/g, '_');
     const baseName = inputName.replace(/\.[^.]+$/, '') || 'decoded';
     const outputName = `${baseName}.decoded.ply`;
-    const inputPath = `/vpcc/input/${inputName}`;
-    const outputPath = `/vpcc/output/${outputName}`;
 
     let ok = false;
     let errorMessage: string | null = null;
     let inputReadMs = 0;
-    let fsWriteMs = 0;
     let decodeMs = 0;
-    let fsReadMs = 0;
+    let fsIoMs = 0;
+    let inputPtr = 0;
 
     try {
         const tInputReadStart = performance.now();
         const inputBytes = new Uint8Array(await file.arrayBuffer());
         inputReadMs = performance.now() - tInputReadStart;
 
-        const tFsWriteStart = performance.now();
-        FS.writeFile(inputPath, inputBytes);
-        fsWriteMs = performance.now() - tFsWriteStart;
+        const hasFs = !!module.FS;
+        let outputArrayBuffer: ArrayBuffer;
 
-        const tDecodeStart = performance.now();
-        const decodeResult = module.ccall('vpcc_decode_file', 'number', ['string', 'string'], [inputPath, outputPath]);
-        decodeMs = performance.now() - tDecodeStart;
-        if (decodeResult !== 0) {
-            const decoderError = module.ccall('vpcc_get_last_error', 'string', [], []) as string;
-            throw new Error(decoderError || `VPCC WASM decoder failed with code ${decodeResult}`);
+        if (hasFs && module.FS) {
+            // Fast path: write/read directly in Emscripten FS to avoid
+            // heap copy + C++ temp file buffering in vpcc_decode_buffer.
+            const fs = module.FS;
+            const inPath = `/tmp/vpcc/${inputName}`;
+            const outPath = `/tmp/vpcc/${outputName}`;
+            const tFsStart = performance.now();
+            try {
+                fs.mkdirTree('/tmp/vpcc');
+                try { fs.unlink(inPath); } catch (_err) {}
+                try { fs.unlink(outPath); } catch (_err) {}
+                fs.writeFile(inPath, inputBytes);
+            } finally {
+                fsIoMs += performance.now() - tFsStart;
+            }
+
+            const tDecodeStart = performance.now();
+            const decodeResult = module.ccall('vpcc_decode_file', 'number', ['string', 'string'], [inPath, outPath]);
+            decodeMs = performance.now() - tDecodeStart;
+            if (decodeResult !== 0) {
+                const decoderError = module.ccall('vpcc_get_last_error', 'string', [], []) as string;
+                throw new Error(decoderError || `VPCC WASM decoder failed with code ${decodeResult}`);
+            }
+
+            const tFsReadStart = performance.now();
+            const outputBytes = fs.readFile(outPath);
+            fsIoMs += performance.now() - tFsReadStart;
+            outputArrayBuffer = outputBytes.buffer.slice(outputBytes.byteOffset, outputBytes.byteOffset + outputBytes.byteLength);
+        } else {
+            // Compatibility fallback for older artifacts that don't export FS.
+            const tHeapWriteStart = performance.now();
+            inputPtr = module._malloc(inputBytes.byteLength);
+            module.HEAPU8.set(inputBytes, inputPtr);
+            fsIoMs = performance.now() - tHeapWriteStart;
+
+            const tDecodeStart = performance.now();
+            const decodeResult = module.ccall('vpcc_decode_buffer', 'number', ['number', 'number'], [inputPtr, inputBytes.byteLength]);
+            decodeMs = performance.now() - tDecodeStart;
+            if (decodeResult !== 0) {
+                const decoderError = module.ccall('vpcc_get_last_error', 'string', [], []) as string;
+                throw new Error(decoderError || `VPCC WASM decoder failed with code ${decodeResult}`);
+            }
+
+            const outputSize = module.ccall('vpcc_get_output_size', 'number', [], []) as number;
+            const outputPtr = module.ccall('vpcc_get_output_buffer', 'number', [], []) as number;
+            if (outputSize <= 0 || outputPtr === 0) {
+                throw new Error('VPCC WASM decoder returned an empty output buffer');
+            }
+            const outputBytes = module.HEAPU8.slice(outputPtr, outputPtr + outputSize);
+            outputArrayBuffer = outputBytes.buffer.slice(outputBytes.byteOffset, outputBytes.byteOffset + outputBytes.byteLength);
         }
-
-        const tFsReadStart = performance.now();
-        const outputBytes = FS.readFile(outputPath);
-        fsReadMs = performance.now() - tFsReadStart;
-        const outputArrayBuffer = outputBytes.slice().buffer;
 
         ok = true;
         return {
@@ -103,36 +128,29 @@ const decodeVpccWithWasm = async (file: File): Promise<VpccImportFile> => {
         throw error;
     } finally {
         const tCleanupStart = performance.now();
-        try {
-            FS.unlink(inputPath);
-        } catch (error) {
-            // ignore cleanup failures
-        }
-        try {
-            FS.unlink(outputPath);
-        } catch (error) {
-            // ignore cleanup failures
-        }
+        if (inputPtr !== 0) { module._free(inputPtr); }
+        module.ccall('vpcc_clear_output_buffer', null, [], []);
 
         const tCleanupEnd = performance.now();
         if (!ok && errorMessage === null) {
             errorMessage = 'VPCC WASM decode failed (unknown error)';
         }
 
-        // Always emit timing info, even when decode fails, so you can compare scheme A/B.
-        const tTotalEnd = performance.now();
-        console.log('[VPCC TIMING][WASM]', {
-            file: file.name,
-            ok,
-            error: errorMessage,
-            totalMs: tTotalEnd - tTotalStart,
-            moduleLoadMs: tModuleEnd - tModuleStart,
-            inputReadMs,
-            fsWriteMs,
-            decodeMs,
-            fsReadMs,
-            cleanupMs: tCleanupEnd - tCleanupStart
-        });
+        const enableTimingLog = (window as any).VPCC_WASM_TIMING === true;
+        if (enableTimingLog) {
+            const tTotalEnd = performance.now();
+            console.log('[VPCC TIMING][WASM]', {
+                file: file.name,
+                ok,
+                error: errorMessage,
+                totalMs: tTotalEnd - tTotalStart,
+                moduleLoadMs: tModuleEnd - tModuleStart,
+                inputReadMs,
+                decodeMs,
+                fsIoMs,
+                cleanupMs: tCleanupEnd - tCleanupStart
+            });
+        }
     }
 };
 
