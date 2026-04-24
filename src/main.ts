@@ -33,6 +33,7 @@ import { registerTrackManagerEvents } from './track-manager';
 import { registerTransformHandlerEvents } from './transform-handler';
 import { EditorUI } from './ui/editor';
 import { localizeInit } from './ui/localization';
+import { prewarmVpccWasm } from './vpcc/wasm-decoder';
 
 declare global {
     interface LaunchParams {
@@ -244,6 +245,18 @@ const main = async () => {
 
     // load async models
     scene.start();
+
+    // 方案 C：应用 idle 阶段预热 VPCC WASM（Worker + 模块加载），
+    // 首次导入 .bin 时可省掉 moduleLoadMs。
+    // 失败静默；`window.VPCC_WASM_NO_PREWARM = true` 可关闭。
+    const kickoffPrewarm = () => {
+        prewarmVpccWasm().catch(() => {});
+    };
+    if (typeof (window as any).requestIdleCallback === 'function') {
+        (window as any).requestIdleCallback(kickoffPrewarm, { timeout: 3000 });
+    } else {
+        setTimeout(kickoffPrewarm, 500);
+    }
 
     // handle load params
     const loadList = url.searchParams.getAll('load');

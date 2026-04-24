@@ -363,31 +363,68 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                     decodePath = 'wasm';
                 }
             } catch (wasmError) {
-                if (!allowLocalFallback) {
+                const wasmMessage = getErrorMessage(wasmError);
+                const looksLikeWasmOom =
+                    /bad_alloc/i.test(wasmMessage) ||
+                    /out of memory/i.test(wasmMessage) ||
+                    /cannot enlarge memory/i.test(wasmMessage) ||
+                    /\boom\b/i.test(wasmMessage);
+
+                const tryLocalService = forceLocalFallback || allowLocalFallback;
+
+                if (!tryLocalService) {
+                    if (looksLikeWasmOom) {
+                        throw new Error(
+                            `${wasmMessage}\n\n` +
+                            '纯浏览器 WASM 解码时内存受限（大场景单帧峰值常超过可用堆）。可尝试更小/更轻的码流；' +
+                            '若必须在网页使用大文件，需先在其它环境将码流解为 PLY 后再导入（本流程不依赖本地解码服务）。'
+                        );
+                    }
                     throw wasmError;
                 }
 
                 try {
                     decodePath = 'wasm->local';
                     decodedFile = await decodeVpccWithLocalService(file);
-                    // if we reach here, wasm failed and local succeeded
                     decodePath = 'local';
                 } catch (serviceError) {
-                    const wasmMessage = getErrorMessage(wasmError);
                     const serviceMessage = getErrorMessage(serviceError);
-                    throw new Error(`Browser VPCC WASM decode failed: ${wasmMessage}\n\nLocal fallback also failed: ${serviceMessage}`);
+                    throw new Error(
+                        `Browser VPCC WASM decode failed: ${wasmMessage}\n\nLocal fallback also failed: ${serviceMessage}`
+                    );
                 }
             }
 
             const tDecodeEnd = performance.now();
 
             const tImportStart = performance.now();
-            const model = await importSplatModel([decodedFile], false);
+            let model: Awaited<ReturnType<typeof importSplatModel>> | undefined;
+            let importMode: 'direct-gsplat' | 'ply-roundtrip' = 'ply-roundtrip';
+
+            if (decodedFile.gsplatData) {
+                // 直连渲染：跳过 splat-transform PLY 二次解析，直接把解码侧构造好的
+                // GSplatData 注入 AssetLoader，随后照常 scene.add。
+                try {
+                    const direct = await scene.assetLoader.loadFromGSplatData(decodedFile.filename, decodedFile.gsplatData, false);
+                    if (direct) {
+                        await scene.add(direct);
+                        model = direct;
+                        importMode = 'direct-gsplat';
+                    }
+                } catch (directErr) {
+                    console.warn('[VPCC][direct] loadFromGSplatData failed, fallback to file path:', directErr);
+                }
+            }
+
+            if (!model) {
+                model = await importSplatModel([decodedFile], false);
+            }
             const tImportEnd = performance.now();
 
             console.log('[VPCC TIMING][FLOW]', {
                 file: file.name,
                 decodePath,
+                importMode,
                 decodeMs: tDecodeEnd - tDecodeStart,
                 importMs: tImportEnd - tImportStart,
                 totalMs: tImportEnd - tFlowStart
