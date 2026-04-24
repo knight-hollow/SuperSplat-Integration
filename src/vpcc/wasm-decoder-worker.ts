@@ -12,7 +12,6 @@
  *   GSplatData 的轻量构造。
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 type WorkerOptions = {
     verboseConsole: boolean;
@@ -113,12 +112,18 @@ const vpccWorkerBody = (wasmModuleUrlStr: string) => {
     const parseDecodedPly = (bytes: Uint8Array) => {
         const scanLimit = Math.min(bytes.length, 65536);
         let terminatorAt = -1;
-        outer: for (let i = 0; i <= scanLimit - END_HEADER.length; i++) {
+        for (let i = 0; i <= scanLimit - END_HEADER.length; i++) {
+            let matched = true;
             for (let j = 0; j < END_HEADER.length; j++) {
-                if (bytes[i + j] !== END_HEADER[j]) continue outer;
+                if (bytes[i + j] !== END_HEADER[j]) {
+                    matched = false;
+                    break;
+                }
             }
-            terminatorAt = i + END_HEADER.length;
-            break;
+            if (matched) {
+                terminatorAt = i + END_HEADER.length;
+                break;
+            }
         }
         if (terminatorAt < 0) throw new Error('VPCC worker: cannot locate end_header');
 
@@ -283,12 +288,12 @@ const vpccWorkerBody = (wasmModuleUrlStr: string) => {
             const hasFs = !!module.FS;
             // 方案 4：优先尝试 C++ 直通路径（需要：新 WASM 导出 + MEMFS + directParse 启用）
             const wantDirectApi =
-                options.directParse
-                && hasFs
-                && typeof module._vpcc_decode_file_direct === 'function'
-                && typeof module._vpcc_get_splat_count === 'function'
-                && typeof module._vpcc_get_property_ptr === 'function'
-                && !!module.HEAPF32;
+                options.directParse &&
+                hasFs &&
+                typeof module._vpcc_decode_file_direct === 'function' &&
+                typeof module._vpcc_get_splat_count === 'function' &&
+                typeof module._vpcc_get_property_ptr === 'function' &&
+                !!module.HEAPF32;
 
             let outputBytes: Uint8Array = new Uint8Array(0);
             let direct: WorkerDirectPayload | null = null;
@@ -302,7 +307,9 @@ const vpccWorkerBody = (wasmModuleUrlStr: string) => {
                 const tFs0 = performance.now();
                 fs.mkdirTree('/tmp/vpcc');
                 if (!options.skipPreUnlink) {
-                    try { fs.unlink(inPath); } catch (_e) {}
+                    try {
+                        fs.unlink(inPath);
+                    } catch (_e) {}
                 }
                 fs.writeFile(inPath, inputBytes, { canOwn: true });
                 fsIoMs += performance.now() - tFs0;
@@ -364,8 +371,12 @@ const vpccWorkerBody = (wasmModuleUrlStr: string) => {
                 const tFs0 = performance.now();
                 fs.mkdirTree('/tmp/vpcc');
                 if (!options.skipPreUnlink) {
-                    try { fs.unlink(inPath); } catch (_e) {}
-                    try { fs.unlink(outPath); } catch (_e) {}
+                    try {
+                        fs.unlink(inPath);
+                    } catch (_e) {}
+                    try {
+                        fs.unlink(outPath);
+                    } catch (_e) {}
                 }
                 fs.writeFile(inPath, inputBytes, { canOwn: true });
                 fsIoMs += performance.now() - tFs0;
@@ -471,13 +482,25 @@ const vpccWorkerBody = (wasmModuleUrlStr: string) => {
             scope.postMessage(reply);
         } finally {
             if (module && module.FS) {
-                if (fsInPath) { try { module.FS.unlink(fsInPath); } catch (_e) {} }
-                if (fsOutPath) { try { module.FS.unlink(fsOutPath); } catch (_e) {} }
+                if (fsInPath) {
+                    try {
+                        module.FS.unlink(fsInPath);
+                    } catch (_e) {}
+                }
+                if (fsOutPath) {
+                    try {
+                        module.FS.unlink(fsOutPath);
+                    } catch (_e) {}
+                }
             }
             if (module) {
-                try { module.ccall('vpcc_clear_output_buffer', null, [], []); } catch (_e) {}
+                try {
+                    module.ccall('vpcc_clear_output_buffer', null, [], []);
+                } catch (_e) {}
                 if (directApiUsed) {
-                    try { module.ccall('vpcc_reset_decoded', null, [], []); } catch (_e) {}
+                    try {
+                        module.ccall('vpcc_reset_decoded', null, [], []);
+                    } catch (_e) {}
                 }
             }
         }

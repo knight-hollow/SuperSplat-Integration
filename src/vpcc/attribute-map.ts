@@ -95,18 +95,27 @@ type VpccDecodedBundle = {
 };
 
 const PLY_TYPE_BYTES: Record<string, number> = {
-    char: 1, int8: 1,
-    uchar: 1, uint8: 1,
-    short: 2, int16: 2,
-    ushort: 2, uint16: 2,
-    int: 4, int32: 4,
-    uint: 4, uint32: 4,
-    float: 4, float32: 4,
-    double: 8, float64: 8
+    char: 1,
+    int8: 1,
+    uchar: 1,
+    uint8: 1,
+    short: 2,
+    int16: 2,
+    ushort: 2,
+    uint16: 2,
+    int: 4,
+    int32: 4,
+    uint: 4,
+    uint32: 4,
+    float: 4,
+    float32: 4,
+    double: 8,
+    float64: 8
 };
 
 const PLY_TYPE_IS_FLOAT32: Record<string, boolean> = {
-    float: true, float32: true
+    float: true,
+    float32: true
 };
 
 type PlyPropDesc = {
@@ -127,12 +136,18 @@ const decodeHeaderAndBody = (bytes: Uint8Array): {
     // 在前 64KB 内寻找 end_header\n
     const scanLimit = Math.min(bytes.length, 64 * 1024);
     let terminatorAt = -1;
-    outer: for (let i = 0; i <= scanLimit - headerTerminator.length; i++) {
+    for (let i = 0; i <= scanLimit - headerTerminator.length; i++) {
+        let matched = true;
         for (let j = 0; j < headerTerminator.length; j++) {
-            if (bytes[i + j] !== headerTerminator[j]) continue outer;
+            if (bytes[i + j] !== headerTerminator[j]) {
+                matched = false;
+                break;
+            }
         }
-        terminatorAt = i + headerTerminator.length;
-        break;
+        if (matched) {
+            terminatorAt = i + headerTerminator.length;
+            break;
+        }
     }
     if (terminatorAt < 0) {
         throw new Error('VPCC direct parser: cannot locate end_header in decoded PLY');
@@ -232,9 +247,7 @@ const parseVpccDecodedPly = (bytes: Uint8Array): VpccDecodedBundle => {
             throw new Error('VPCC direct parser: unexpected float-only row padding');
         }
         // 若字节对齐，直接用一个 Float32Array 视图 + 行优先扫描去交织，避免 DataView getFloat32 调用开销。
-        const interleaved = ((bytes.byteOffset + bodyOffset) % 4 === 0)
-            ? new Float32Array(bytes.buffer, bytes.byteOffset + bodyOffset, floatsTotal)
-            : null;
+        const interleaved = ((bytes.byteOffset + bodyOffset) % 4 === 0) ? new Float32Array(bytes.buffer, bytes.byteOffset + bodyOffset, floatsTotal) : null;
         if (interleaved) {
             const columns: Float32Array[] = props.map(p => attrs[p.name]);
             for (let row = 0, base = 0; row < numVertices; row++, base += propCount) {

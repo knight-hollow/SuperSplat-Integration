@@ -10,13 +10,10 @@
  *   （例如对比老路径或调试兼容性）时设置 `window.VPCC_WASM_DIRECT = false`。
  */
 
-import { buildGSplatDataFromBundle, parseVpccDecodedPly } from './attribute-map';
-import type { VpccDecodedBundle } from './attribute-map';
-import { createVpccWorkerUrl } from './wasm-decoder-worker';
-import type { WorkerRequest, WorkerResponse, WorkerReadySignal, WorkerOptions } from './wasm-decoder-worker';
+import { buildGSplatDataFromBundle, parseVpccDecodedPly, type VpccDecodedBundle } from './attribute-map';
 import type { VpccImportFile } from './types';
+import { createVpccWorkerUrl, type WorkerRequest, type WorkerResponse, type WorkerReadySignal, type WorkerOptions } from './wasm-decoder-worker';
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 type VpccWasmModule = {
     HEAPU8: Uint8Array;
@@ -139,14 +136,23 @@ const tryCreateWorkerClient = (): Promise<WorkerClient | null> => {
         };
 
         const dispose = () => {
-            try { worker.terminate(); } catch (_e) {}
-            try { URL.revokeObjectURL(blobUrl); } catch (_e) {}
+            try {
+                worker.terminate();
+            } catch (_e) {}
+            try {
+                URL.revokeObjectURL(blobUrl);
+            } catch (_e) {}
             for (const entry of pending.values()) entry.reject(new Error('VPCC worker disposed'));
             pending.clear();
             healthy = false;
         };
 
-        resolve({ ready, post, dispose, get healthy() { return healthy; } } as WorkerClient);
+        resolve({ ready,
+            post,
+            dispose,
+            get healthy() {
+                return healthy;
+            } } as WorkerClient);
     });
 };
 
@@ -228,12 +234,12 @@ const decodeOnMainThread = async (file: File): Promise<VpccImportFile> => {
         const hasFs = !!module.FS;
         const directRender = (window as any).VPCC_WASM_DIRECT !== false;
         const wantDirectApi =
-            directRender
-            && hasFs
-            && typeof (module as any)._vpcc_decode_file_direct === 'function'
-            && typeof (module as any)._vpcc_get_splat_count === 'function'
-            && typeof (module as any)._vpcc_get_property_ptr === 'function'
-            && !!module.HEAPF32;
+            directRender &&
+            hasFs &&
+            typeof (module as any)._vpcc_decode_file_direct === 'function' &&
+            typeof (module as any)._vpcc_get_splat_count === 'function' &&
+            typeof (module as any)._vpcc_get_property_ptr === 'function' &&
+            !!module.HEAPF32;
 
         let outputBytes: Uint8Array = new Uint8Array(0);
         let gsplatData: VpccImportFile['gsplatData'];
@@ -247,7 +253,9 @@ const decodeOnMainThread = async (file: File): Promise<VpccImportFile> => {
             try {
                 fs.mkdirTree('/tmp/vpcc');
                 if (!skipPreUnlink) {
-                    try { fs.unlink(inPath); } catch (_err) {}
+                    try {
+                        fs.unlink(inPath);
+                    } catch (_err) {}
                 }
                 (fs as any).writeFile(inPath, inputBytes, { canOwn: true });
             } finally {
@@ -306,8 +314,12 @@ const decodeOnMainThread = async (file: File): Promise<VpccImportFile> => {
             try {
                 fs.mkdirTree('/tmp/vpcc');
                 if (!skipPreUnlink) {
-                    try { fs.unlink(inPath); } catch (_err) {}
-                    try { fs.unlink(outPath); } catch (_err) {}
+                    try {
+                        fs.unlink(inPath);
+                    } catch (_err) {}
+                    try {
+                        fs.unlink(outPath);
+                    } catch (_err) {}
                 }
                 (fs as any).writeFile(inPath, inputBytes, { canOwn: true });
             } finally {
@@ -382,12 +394,24 @@ const decodeOnMainThread = async (file: File): Promise<VpccImportFile> => {
             module._free(inputPtr);
         }
         if (module.FS) {
-            if (fsInPath) { try { module.FS.unlink(fsInPath); } catch (_err) {} }
-            if (fsOutPath) { try { module.FS.unlink(fsOutPath); } catch (_err) {} }
+            if (fsInPath) {
+                try {
+                    module.FS.unlink(fsInPath);
+                } catch (_err) {}
+            }
+            if (fsOutPath) {
+                try {
+                    module.FS.unlink(fsOutPath);
+                } catch (_err) {}
+            }
         }
-        try { module.ccall('vpcc_clear_output_buffer', null, [], []); } catch (_err) {}
+        try {
+            module.ccall('vpcc_clear_output_buffer', null, [], []);
+        } catch (_err) {}
         if (directApiUsed) {
-            try { module.ccall('vpcc_reset_decoded', null, [], []); } catch (_err) {}
+            try {
+                module.ccall('vpcc_reset_decoded', null, [], []);
+            } catch (_err) {}
         }
 
         const tCleanupEnd = performance.now();

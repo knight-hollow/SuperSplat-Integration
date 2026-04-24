@@ -75,7 +75,7 @@ class AssetLoader {
      * 语义与 load() 一致，同样会生成 Asset + GSplatResource + Splat，
      * 方便 scene.add 无差别接管。
      */
-    async loadFromGSplatData(filename: string, gsplatData: GSplatData, animationFrame?: boolean) {
+    loadFromGSplatData(filename: string, gsplatData: GSplatData, animationFrame?: boolean) {
         const tAllStart = performance.now();
         if (!animationFrame) {
             this.events.fire('startSpinner');
